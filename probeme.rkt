@@ -1,6 +1,6 @@
 #lang racket
 
-(struct Req (meth path proto headers) #:transparent)
+(struct Req (meth path proto headers from) #:transparent)
 
 (define (read-headers ip)
   (define (r headers)
@@ -12,17 +12,19 @@
           [(list _ k v) (r (cons (cons k v) headers))])]))
   (r '()))
 
-(define (read-req ip)
+(define (read-req ip from)
   (define req-line (read-line ip 'return-linefeed))
   (match (string-split req-line #rx" +")
     [(list meth path proto)
-     (Req meth path proto (read-headers ip))]
+     (Req meth path proto (read-headers ip) from)]
     [_
       ; Invalid req line
       #f]))
 
 (define (handle ip op)
-  (define req (read-req ip))
+  (define-values (addr-server addr-client) (tcp-addresses ip))
+  (eprintf "tcp-addresses: server:~v client:~v~n" addr-server addr-client)
+  (define req (read-req ip addr-client))
   (display "HTTP/1.0 200 OK" op)
   (display "\r\n" op)
   (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
