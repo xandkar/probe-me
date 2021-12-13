@@ -56,11 +56,6 @@
   (eprintf "tcp-addresses: server:~v client:~v~n" addr-server addr-client)
   (define req (read-req ip addr-client))
   (when req
-    (display "HTTP/1.0 200 OK" op)
-    (display "\r\n" op)
-    (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
-    (display "\r\n" op)
-    (display "\r\n" op)
     (define target-port-num
       (match (Req-path req)
         ['() default-target-port-num]
@@ -68,9 +63,25 @@
         [(list* port-num-str _)
          (eprintf "port-num-str ~v~n" port-num-str)
          (string->number port-num-str)]))
-    (define probe-status (if (probe addr-client target-port-num) "up" "down"))
-    (display (format "~a ~a ~a" addr-client target-port-num probe-status) op)
-    (display "\r\n" op)))
+    (if (and target-port-num
+             (>= target-port-num 1)
+             (<= target-port-num 65535))
+        (let ([probe-status (if (probe addr-client target-port-num) "up" "down")])
+          (display "HTTP/1.0 200 OK" op)
+          (display "\r\n" op)
+          (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
+          (display "\r\n" op)
+          (display "\r\n" op)
+          (display (format "~a ~a ~a" addr-client target-port-num probe-status) op)
+          (display "\r\n" op))
+        (begin
+          (display "HTTP/1.0 400 OK" op)
+          (display "\r\n" op)
+          (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
+          (display "\r\n" op)
+          (display "\r\n" op)
+          (display (format "Expected: number 1-65535. Received: ~v" (car (Req-path req))) op)
+          (display "\r\n" op)))))
 
 (define (accept-and-handle listener)
   (define acceptor-custodian (make-custodian))
