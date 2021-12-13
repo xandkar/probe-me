@@ -16,16 +16,22 @@
 
 (define (read-req ip from)
   (define req-line (read-line ip 'return-linefeed))
-  (match (string-split req-line #rx" +")
-    [(list meth path proto)
-     (Req meth
-          (map path/param-path (url-path (string->url path))) ; TODO Handle exn
-          proto
-          (read-headers ip)
-          from)]
-    [_
-      ; Invalid req line
-      #f]))
+  (cond [(eof-object? req-line)
+         #f]
+        [(string? req-line)
+         (match (string-split req-line #rx" +")
+           [(list meth path proto)
+            (Req meth
+                 (map path/param-path (url-path (string->url path))) ; TODO Handle exn
+                 proto
+                 (read-headers ip)
+                 from)]
+           [_
+             ; Invalid req line
+             #f])]
+        [else
+          (eprintf "WARN: req-line neither EOF nor string: ~v" req-line)
+          #f]))
 
 (define/contract (probe addr port-num)
   (-> string? number? boolean?)
