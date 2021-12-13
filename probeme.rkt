@@ -21,7 +21,25 @@
       ; Invalid req line
       #f]))
 
+(define/contract (probe addr port-num)
+  (-> string? number? boolean?)
+  (define up? #f)
+  (sync/timeout
+    5
+    (thread (λ ()
+               (with-handlers
+                 ([exn:fail:network?
+                    (λ (_)
+                       (eprintf "connection failed to ~a ~a~n" addr port-num))])
+                 (define-values (ip op) (tcp-connect addr port-num))
+                 (eprintf "connection succeeded to ~a ~a~n" addr port-num)
+                 (close-input-port ip)
+                 (close-output-port op)
+                 (set! up? #t)))))
+  up?)
+
 (define (handle ip op)
+  (define target-port-num 80)  ; TODO Grap from URL path
   (define-values (addr-server addr-client) (tcp-addresses ip))
   (eprintf "tcp-addresses: server:~v client:~v~n" addr-server addr-client)
   (define req (read-req ip addr-client))
@@ -30,7 +48,7 @@
   (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
   (display "\r\n" op)
   (display "\r\n" op)
-  (display (pretty-format req) op)
+  (display (if (probe addr-client target-port-num) "up" "down") op)
   (display "\r\n" op)
   )
 
