@@ -1,5 +1,7 @@
 #lang racket
 
+(require net/url)
+
 (struct Req (meth path proto headers from) #:transparent)
 
 (define (read-headers ip)
@@ -16,7 +18,11 @@
   (define req-line (read-line ip 'return-linefeed))
   (match (string-split req-line #rx" +")
     [(list meth path proto)
-     (Req meth path proto (read-headers ip) from)]
+     (Req meth
+          (map path/param-path (url-path (string->url path))) ; TODO Handle exn
+          proto
+          (read-headers ip)
+          from)]
     [_
       ; Invalid req line
       #f]))
@@ -39,7 +45,7 @@
   up?)
 
 (define (handle ip op)
-  (define target-port-num 80)  ; TODO Grap from URL path
+  (define default-target-port-num 80)
   (define-values (addr-server addr-client) (tcp-addresses ip))
   (eprintf "tcp-addresses: server:~v client:~v~n" addr-server addr-client)
   (define req (read-req ip addr-client))
@@ -48,9 +54,16 @@
   (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
   (display "\r\n" op)
   (display "\r\n" op)
-  (display (if (probe addr-client target-port-num) "up" "down") op)
-  (display "\r\n" op)
-  )
+  (define target-port-num
+    (match (Req-path req)
+      ['() default-target-port-num]
+      ['("") default-target-port-num]
+      [(list* port-num-str _)
+       (eprintf "port-num-str ~v~n" port-num-str)
+       (string->number port-num-str)]))
+  (define probe-status (if (probe addr-client target-port-num) "up" "down"))
+  (display (format "~a ~a ~a" addr-client target-port-num probe-status) op)
+  (display "\r\n" op))
 
 (define (accept-and-handle listener)
   (define acceptor-custodian (make-custodian))
