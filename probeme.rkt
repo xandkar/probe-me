@@ -4,7 +4,8 @@
 
 (struct Req (meth path proto headers from) #:transparent)
 
-(define (read-headers ip)
+(define/contract (read-headers ip)
+  (-> input-port? (listof (cons/c string? string?)))
   (define (r headers)
     (match (read-line ip 'return-linefeed)
       [eof #:when (eof-object? eof) headers]
@@ -14,7 +15,8 @@
           [(list _ k v) (r (cons (cons k v) headers))])]))
   (r '()))
 
-(define (read-req ip from)
+(define/contract (read-req ip from)
+  (-> input-port? string? Req?)
   (define req-line (read-line ip 'return-linefeed))
   (cond [(eof-object? req-line)
          #f]
@@ -39,10 +41,12 @@
   (sync/timeout timeout (thread (λ () (set! line (read-line ip 'any)))))
   line)
 
-(define (string-drop-control-chars s)
+(define/contract (string-drop-control-chars s)
+  (-> string? string?)
   (list->string (filter (not/c char-iso-control?) (string->list s))))
 
-(define (service-line-normalize str)
+(define/contract (service-line-normalize str)
+  (-> string? string?)
   (string-drop-control-chars str))
 
 (define/contract (probe addr port-num)
@@ -67,7 +71,8 @@
                  (close-output-port op)))))
   up?)
 
-(define (handle ip op)
+(define/contract (handle ip op)
+  (-> input-port? output-port? void?)
   (define default-target-port-num 80)
   (define-values
     (server-addr server-port-num client-addr client-port-num)
@@ -107,7 +112,8 @@
           (display (format "Expected: number 1-65535. Received: ~v" (car (Req-path req))) op)
           (display "\r\n" op)))))
 
-(define (accept-and-handle listener)
+(define/contract (accept-and-handle listener)
+  (-> tcp-listener? void?)
   (define acceptor-custodian (make-custodian))
   (define mem-limit 50)
   (define timeout 10)
@@ -120,9 +126,11 @@
                (close-output-port op))))
   (thread (λ ()
              (sleep timeout)
-             (custodian-shutdown-all acceptor-custodian))))
+             (custodian-shutdown-all acceptor-custodian)))
+  (void))
 
-(define (serve port-num)
+(define/contract (serve port-num)
+  (-> listen-port-number? void?)
   (define server-custodian (make-custodian))
   (parameterize ([current-custodian server-custodian])
     ; Maximum number of client connections that can be waiting for acceptance:
