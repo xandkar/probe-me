@@ -13,12 +13,17 @@
                          [headers headers?]
                          [from string?]))
 
+(define req-handler? (-> input-port? output-port? Req/c void?))
+
 (define phrases (hash 200 "OK"
                       400 "Bad Request"
+                      404 "Not Found"
+                      405 "Method Not Allowed"
                       500 "Internal Server Error"))
 
-(define/contract (reply op code body)
-  (-> output-port? (integer-in 100 599) string? void?)
+(define/contract (reply op code [body ""])
+  (->* (output-port? (integer-in 100 599)) (string?) void?)
+  (eprintf "response: ~a ~a~n" code body)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
           "Server: probeme.xandkar"
@@ -84,9 +89,9 @@
                (with-handlers
                  ([exn:fail:network?
                     (λ (_)
-                       (eprintf "connection failed to ~a ~a~n" addr port-num))])
+                       (eprintf "probe connection failed to ~a:~a~n" addr port-num))])
                  (define-values (ip op) (tcp-connect addr port-num))
-                 (eprintf "connection succeeded to ~a ~a~n" addr port-num)
+                 (eprintf "probe connection succeeded to ~a:~a~n" addr port-num)
                  (set! up? #t)
                  (define service-line (read-line/timeout ip timeout-read))
                  (when service-line
@@ -95,35 +100,44 @@
                  (close-output-port op)))))
   up?)
 
-(define/contract (handle ip op)
-  (-> input-port? output-port? void?)
-  (define default-target-port-num 80)
-  (define-values
-    (server-addr server-port-num client-addr client-port-num)
-    (tcp-addresses ip #t))
-  (eprintf "tcp-addresses: server:~a:~a client:~a:~a~n"
-           server-addr server-port-num
-           client-addr client-port-num)
-  (define req (read-req ip client-addr))
-  (when req
-    (define target-port-num
-      (match (Req-path req)
-        [(or '() '("")) default-target-port-num]
-        [(list* port-num-str _)
-         (eprintf "port-num-str ~v~n" port-num-str)
-         (string->number port-num-str)]))
-    (if (and target-port-num
-             (>= target-port-num 1)
-             (<= target-port-num 65535))
-        (let ([probe-status
-                (match (probe client-addr target-port-num)
-                  [#f "down"]
-                  [#t "up"]
-                  [service-line (format "up ~a" service-line)])])
-          (reply op 200 (format "~a ~a ~a" client-addr target-port-num probe-status)))
-        (reply op 400 (format "Expected: number 1-65535. Received: ~v" (car (Req-path req)))))))
+(define/contract (handle-probe ip op req)
+  req-handler?
+  (define addr (Req-from req))
+  (define port-num (string->number (car (Req-path req))))
+  (if (and port-num (port-number? port-num))
+      (match (Req-meth req)
+        ["GET" (reply op
+                      200
+                      (format "~a ~a ~a"
+                              addr
+                              port-num
+                              (match (probe addr port-num)
+                                [#f "down"]
+                                [#t "up"]
+                                [service-line (format "up ~a" service-line)])))]
+        [_ (reply op 405)])
+      (reply op 400 (format "Invalid port number: ~v" port-num))))
 
-(define/contract (accept-and-handle listener)
+(define/contract (route path)
+  (-> (listof string?) (or/c #f req-handler?))
+  (match path
+    [(list n) #:when (regexp-match? #rx"^[0-9]+$" n) handle-probe]
+    [_ #f]))
+
+(define/contract (dispatch ip op client-addr)
+  (-> input-port? output-port? string? void?)
+  (define req (read-req ip client-addr))
+  (eprintf "request: ~a~n" req)
+  (match req
+    [#f (reply op 400)]
+    [req (match (route (Req-path req))
+           [#f (reply op 404)]
+           [handler (with-handlers ([any/c (λ (e)
+                                              (eprintf "handler crash: ~a~n" e)
+                                              (reply op 500 ""))])
+                                   (handler ip op req))])]))
+
+(define/contract (accept-and-dispatch listener)
   (-> tcp-listener? void?)
   (define acceptor-custodian (make-custodian))
   (define mem-limit 50)
@@ -131,13 +145,10 @@
   (custodian-limit-memory acceptor-custodian (* mem-limit 1024 1024))
   (parameterize ([current-custodian acceptor-custodian])
     (define-values (ip op) (tcp-accept listener))
+    (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
+    (eprintf "connection from ~a~a~n" client-addr client-port)
     (thread (λ ()
-               (with-handlers
-                 ([any/c
-                    (λ (e)
-                       (eprintf "handler crash: ~a~n" e)
-                       (reply op 500 ""))])
-                 (handle ip op))
+               (dispatch ip op client-addr)
                (close-input-port ip)
                (close-output-port op))))
   (thread (λ ()
@@ -156,7 +167,7 @@
     (define listener (tcp-listen port-num max-allow-wait reuse?))
     (define server
       (thread (λ () (let loop ()
-                      (accept-and-handle listener)
+                      (accept-and-dispatch listener)
                       (loop)))))
     (thread-wait server)))
 
