@@ -87,17 +87,26 @@
     timeout-connect
     (thread (λ ()
                (with-handlers
-                 ([exn:fail:network?
-                    (λ (_)
-                       (eprintf "probe connection failed to ~a:~a~n" addr port-num))])
+                 ([exn:fail:network? (λ (_) (void))])
                  (define-values (ip op) (tcp-connect addr port-num))
                  (eprintf "probe connection succeeded to ~a:~a~n" addr port-num)
                  (set! up? #t)
                  (define service-line (read-line/timeout ip timeout-read))
-                 (when service-line
-                   (set! up? (service-line-normalize service-line)))
+                 (if service-line
+                     (begin
+                       (set! up? (service-line-normalize service-line))
+                       (eprintf
+                         "probe service banner read succeeded from ~a:~a~n"
+                         addr
+                         port-num))
+                     (eprintf
+                       "probe service banner read failed from ~a:~a~n"
+                       addr
+                       port-num))
                  (close-input-port ip)
                  (close-output-port op)))))
+  (unless up?
+    (eprintf "probe connection failed to ~a:~a~n" addr port-num))
   up?)
 
 (define/contract (handle-probe ip op req)
