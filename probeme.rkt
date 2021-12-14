@@ -146,7 +146,7 @@
   (parameterize ([current-custodian acceptor-custodian])
     (define-values (ip op) (tcp-accept listener))
     (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
-    (eprintf "connection from ~a~a~n" client-addr client-port)
+    (eprintf "connection from ~a:~a~n" client-addr client-port)
     (thread (λ ()
                (dispatch ip op client-addr)
                (close-input-port ip)
