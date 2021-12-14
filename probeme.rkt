@@ -34,7 +34,7 @@
           #f]))
 
 (define/contract (read-line/timeout ip timeout)
-  (-> input-port? (or/c #f string?))
+  (-> input-port? (and/c real? (not/c negative?)) (or/c #f string?))
   (define line #f)
   (sync/timeout timeout (thread (λ () (set! line (read-line ip 'any)))))
   line)
