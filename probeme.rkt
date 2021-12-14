@@ -52,27 +52,30 @@
 
 (define (handle ip op)
   (define default-target-port-num 80)
-  (define-values (addr-server addr-client) (tcp-addresses ip))
-  (eprintf "tcp-addresses: server:~v client:~v~n" addr-server addr-client)
-  (define req (read-req ip addr-client))
+  (define-values
+    (server-addr server-port-num client-addr client-port-num)
+    (tcp-addresses ip #t))
+  (eprintf "tcp-addresses: server:~a:~a client:~a:~a~n"
+           server-addr server-port-num
+           client-addr client-port-num)
+  (define req (read-req ip client-addr))
   (when req
     (define target-port-num
       (match (Req-path req)
-        ['() default-target-port-num]
-        ['("") default-target-port-num]
+        [(or '() '("")) default-target-port-num]
         [(list* port-num-str _)
          (eprintf "port-num-str ~v~n" port-num-str)
          (string->number port-num-str)]))
     (if (and target-port-num
              (>= target-port-num 1)
              (<= target-port-num 65535))
-        (let ([probe-status (if (probe addr-client target-port-num) "up" "down")])
+        (let ([probe-status (if (probe client-addr target-port-num) "up" "down")])
           (display "HTTP/1.0 200 OK" op)
           (display "\r\n" op)
           (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
           (display "\r\n" op)
           (display "\r\n" op)
-          (display (format "~a ~a ~a" addr-client target-port-num probe-status) op)
+          (display (format "~a ~a ~a" client-addr target-port-num probe-status) op)
           (display "\r\n" op))
         (begin
           (display "HTTP/1.0 400 OK" op)
