@@ -39,6 +39,12 @@
   (sync/timeout timeout (thread (λ () (set! line (read-line ip 'any)))))
   line)
 
+(define (string-drop-control-chars s)
+  (list->string (filter (not/c char-iso-control?) (string->list s))))
+
+(define (service-line-normalize str)
+  (string-drop-control-chars str))
+
 (define/contract (probe addr port-num)
   (-> string? number? (or/c boolean? string?))
   (define up? #f)
@@ -56,7 +62,7 @@
                  (set! up? #t)
                  (define service-line (read-line/timeout ip timeout-read))
                  (when service-line
-                   (set! up? service-line))
+                   (set! up? (service-line-normalize service-line)))
                  (close-input-port ip)
                  (close-output-port op)))))
   up?)
