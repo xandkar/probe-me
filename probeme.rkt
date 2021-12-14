@@ -2,7 +2,16 @@
 
 (require net/url)
 
+(define headers? (listof (cons/c string? string?)))
+
 (struct Req (meth path proto headers from) #:transparent)
+
+(define Req/c (struct/dc Req
+                         [meth string?]
+                         [path (listof string?)]
+                         [proto string?]
+                         [headers headers?]
+                         [from string?]))
 
 (define phrases (hash 200 "OK"
                       400 "Bad Request"
@@ -20,7 +29,7 @@
     #:separator "\r\n"))
 
 (define/contract (read-headers ip)
-  (-> input-port? (listof (cons/c string? string?)))
+  (-> input-port? headers?)
   (define (r headers)
     (match (read-line ip 'return-linefeed)
       [eof #:when (eof-object? eof) headers]
@@ -31,7 +40,7 @@
   (r '()))
 
 (define/contract (read-req ip from)
-  (-> input-port? string? (or/c #f Req?))
+  (-> input-port? string? (or/c #f Req/c))
   (define req-line (read-line ip 'return-linefeed))
   (cond [(eof-object? req-line)
          #f]
