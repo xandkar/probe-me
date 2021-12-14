@@ -4,6 +4,21 @@
 
 (struct Req (meth path proto headers from) #:transparent)
 
+(define phrases (hash 200 "OK"
+                      400 "Bad Request"
+                      500 "Internal Server Error"))
+
+(define/contract (reply op code body)
+  (-> output-port? (integer-in 100 599) string? void?)
+  (display-lines
+    (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
+          "Server: probeme.xandkar"
+          "Content-Type: text/plain"
+          ""
+          body)
+    op
+    #:separator "\r\n"))
+
 (define/contract (read-headers ip)
   (-> input-port? (listof (cons/c string? string?)))
   (define (r headers)
@@ -16,7 +31,7 @@
   (r '()))
 
 (define/contract (read-req ip from)
-  (-> input-port? string? Req?)
+  (-> input-port? string? (or/c #f Req?))
   (define req-line (read-line ip 'return-linefeed))
   (cond [(eof-object? req-line)
          #f]
@@ -96,21 +111,8 @@
                   [#f "down"]
                   [#t "up"]
                   [service-line (format "up ~a" service-line)])])
-          (display "HTTP/1.0 200 OK" op)
-          (display "\r\n" op)
-          (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
-          (display "\r\n" op)
-          (display "\r\n" op)
-          (display (format "~a ~a ~a" client-addr target-port-num probe-status) op)
-          (display "\r\n" op))
-        (begin
-          (display "HTTP/1.0 400 OK" op)
-          (display "\r\n" op)
-          (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
-          (display "\r\n" op)
-          (display "\r\n" op)
-          (display (format "Expected: number 1-65535. Received: ~v" (car (Req-path req))) op)
-          (display "\r\n" op)))))
+          (reply op 200 (format "~a ~a ~a" client-addr target-port-num probe-status)))
+        (reply op 400 (format "Expected: number 1-65535. Received: ~v" (car (Req-path req)))))))
 
 (define/contract (accept-and-handle listener)
   (-> tcp-listener? void?)
@@ -121,7 +123,12 @@
   (parameterize ([current-custodian acceptor-custodian])
     (define-values (ip op) (tcp-accept listener))
     (thread (λ ()
-               (handle ip op)
+               (with-handlers
+                 ([any/c
+                    (λ (e)
+                       (eprintf "handler crash: ~a~n" e)
+                       (reply op 500 ""))])
+                 (handle ip op))
                (close-input-port ip)
                (close-output-port op))))
   (thread (λ ()
