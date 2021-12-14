@@ -33,11 +33,19 @@
           (eprintf "WARN: req-line neither EOF nor string: ~v" req-line)
           #f]))
 
+(define/contract (read-line/timeout ip timeout)
+  (-> input-port? (or/c #f string?))
+  (define line #f)
+  (sync/timeout timeout (thread (λ () (set! line (read-line ip 'any)))))
+  line)
+
 (define/contract (probe addr port-num)
-  (-> string? number? boolean?)
+  (-> string? number? (or/c boolean? string?))
   (define up? #f)
+  (define timeout-connect 5)  ; TODO Option
+  (define timeout-read    1)  ; TODO Option
   (sync/timeout
-    5
+    timeout-connect
     (thread (λ ()
                (with-handlers
                  ([exn:fail:network?
@@ -45,9 +53,12 @@
                        (eprintf "connection failed to ~a ~a~n" addr port-num))])
                  (define-values (ip op) (tcp-connect addr port-num))
                  (eprintf "connection succeeded to ~a ~a~n" addr port-num)
+                 (set! up? #t)
+                 (define service-line (read-line/timeout ip timeout-read))
+                 (when service-line
+                   (set! up? service-line))
                  (close-input-port ip)
-                 (close-output-port op)
-                 (set! up? #t)))))
+                 (close-output-port op)))))
   up?)
 
 (define (handle ip op)
@@ -69,7 +80,11 @@
     (if (and target-port-num
              (>= target-port-num 1)
              (<= target-port-num 65535))
-        (let ([probe-status (if (probe client-addr target-port-num) "up" "down")])
+        (let ([probe-status
+                (match (probe client-addr target-port-num)
+                  [#f "down"]
+                  [#t "up"]
+                  [service-line (format "up ~a" service-line)])])
           (display "HTTP/1.0 200 OK" op)
           (display "\r\n" op)
           (display "Server: probeme.xandkar\r\nContent-Type: text/plain" op)
