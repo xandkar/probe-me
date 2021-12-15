@@ -1,4 +1,4 @@
-probeme: probeme.rkt
+probeme: probeme.rkt req-id.rkt
 	raco exe -o $@ $^
 
 .PHONY: build
