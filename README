@@ -1,0 +1,42 @@
+probeme
+=======
+
+TCP port probing microservice.
+
+Originally [@asinovski][1]'s idea for lightweight [Helium][2] [Miner][3]
+monitoring service, but generalized for miscellaneous self-probing fun.
+
+[1]: https://github.com/asinovski
+[2]: https://www.helium.com/
+[3]: https://github.com/helium/miner/
+
+build
+-----
+
+    make
+
+usage
+-----
+
+### server
+
+    ./probeme
+
+### client
+
+* uri: `http://$server_host:$server_port/$client_target_port`
+* method: `GET`
+* response body: `$client_address $client_target_port [up | down] [$service_banner]`
+
+#### example
+
+    $ curl -i http://localhost:8080/6600
+    HTTP/1.0 200 OK
+    Server: probeme.xandkar
+    Content-Type: text/plain
+
+    127.0.0.1 6600 up OK MPD 0.23.5
+
+#### demo
+
+http://xandkar.net:8080/22
