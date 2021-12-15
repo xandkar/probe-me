@@ -1,18 +1,19 @@
-probeme: probeme.rkt req-id.rkt
-	raco exe -o $@ $^
+EXE = probe-me
+
+$(EXE): $(EXE).rkt req-id.rkt
+	raco exe --orig-exe -o $@ $(EXE).rkt
 
 .PHONY: build
-build: probeme
+build: $(EXE)
 
 .PHONY: rebuild
 rebuild:
-	$(MAKE) clean
-	$(MAKE) build
+	$(MAKE) --always-make build
 
 .PHONY: test
 test:
-	raco test probeme.rkt
+	raco test *.rkt
 
 .PHONY: clean
 clean:
-	rm -f probeme
+	rm -f $(EXE)

@@ -31,7 +31,7 @@
   (eprintf "[~a] response: ~a ~a~n" req-id code body)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
-          "Server: probeme.xandkar"
+          "Server: probe-me.xandkar"
           "Content-Type: text/plain"
           ""
           body)

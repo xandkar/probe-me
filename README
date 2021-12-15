@@ -1,5 +1,5 @@
-probeme
-=======
+probe-me
+========
 
 TCP port probing microservice.
 
@@ -20,7 +20,7 @@ usage
 
 ### server
 
-    ./probeme
+    ./probe-me
 
 ### client
 
@@ -32,7 +32,7 @@ usage
 
     $ curl -i http://localhost:8080/6600
     HTTP/1.0 200 OK
-    Server: probeme.xandkar
+    Server: probe-me.xandkar
     Content-Type: text/plain
 
     127.0.0.1 6600 up OK MPD 0.23.5
