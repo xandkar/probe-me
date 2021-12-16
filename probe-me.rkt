@@ -35,11 +35,11 @@
 
 (define req-id-init (req-id-next))
 
-(define req-id-curr (make-parameter req-id-init))
+(define current-req-id (make-parameter req-id-init))
 
 (define/contract (reply op code [body ""])
   (->* (output-port? (integer-in 100 599)) (string?) void?)
-  (eprintf "[~a] response: ~a ~a~n" (req-id-curr) code body)
+  (eprintf "[~a] response: ~a ~a~n" (current-req-id) code body)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
           "Server: probe-me.xandkar"
@@ -62,7 +62,7 @@
 
 (define/contract (read-req ip from)
   (-> input-port? string? (or/c #f Req/c))
-  (define req-id (req-id-curr))
+  (define req-id (current-req-id))
   (define req-line (read-line ip 'return-linefeed))
   (cond [(eof-object? req-line)
          #f]
@@ -102,7 +102,7 @@
 
 (define/contract (probe addr port-num)
   (-> string? number? (or/c boolean? string?))
-  (define req-id (req-id-curr))
+  (define req-id (current-req-id))
   (define up? #f)
   (define timeout-connect 5)  ; TODO Option
   (define timeout-read    1)  ; TODO Option
@@ -136,7 +136,7 @@
 
 (define/contract (handle-probe ip op req)
   req-handler?
-  (define req-id (req-id-curr))
+  (define req-id (current-req-id))
   (define addr (Req-from req))
   (define port-num (string->number (car (Req-path req))))
   (if (and port-num (port-number? port-num))
@@ -161,7 +161,7 @@
 
 (define/contract (dispatch ip op client-addr)
   (-> input-port? output-port? string? void?)
-  (define req-id (req-id-curr))
+  (define req-id (current-req-id))
   (define req (read-req ip client-addr))
   (eprintf "[~a] request: ~s~n" req-id req)
   (match req
@@ -176,7 +176,7 @@
 
 (define/contract (accept-and-dispatch listener)
   (-> tcp-listener? void?)
-  (parameterize ([req-id-curr (req-id-next)])
+  (parameterize ([current-req-id (req-id-next)])
     (define acceptor-custodian (make-custodian))
     (custodian-limit-memory acceptor-custodian
                             (* (request-mem-limit-mb) 1024 1024))
@@ -187,7 +187,7 @@
         (define-values (ip op) (tcp-accept listener))
         (values (current-inexact-milliseconds)
                 (thread (λ ()
-                   (define req-id (req-id-curr))
+                   (define req-id (current-req-id))
                    (match-define-values
                      (_ _ client-addr client-port)
                      (tcp-addresses ip #t))
@@ -205,8 +205,10 @@
     (thread (λ ()
                (define result (sync completed timed-out))
                (define t1 (current-inexact-milliseconds))
-               (define duration (real->decimal-string (/ (- t1 t0) 1000) 3))
-               (eprintf "[~a] END: ~a in ~a seconds~n" (req-id-curr) result duration)
+               (eprintf "[~a] END: ~a in ~a seconds~n"
+                        (current-req-id)
+                        result
+                        (real->decimal-string (/ (- t1 t0) 1000) 3))
                (custodian-shutdown-all acceptor-custodian)
                (kill-thread handler-thread)))
     (void)))
