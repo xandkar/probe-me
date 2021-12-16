@@ -78,9 +78,7 @@
          (match (string-split req-line #rx" +")
            [(list meth path-str proto)
             (let* ([url (url:string->url path-str)] ; TODO Handle exceptions
-                   [path (filter (λ (s) (not (string=? "" s)))
-                                 (map url:path/param-path
-                                      (url:url-path url)))]
+                   [path (map url:path/param-path (url:url-path url))]
                    [query (url:url-query url)])
               (eprintf "[~a] query: ~s~n" req-id query)
               (Req meth
