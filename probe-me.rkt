@@ -42,15 +42,13 @@
   (-> string?)
   (let ([start-time (current-inexact-milliseconds)]
         [pid (os:getpid)]
-        ; XXX -1 assumes init will call next immediately after next's definition:
+        ; XXX -1 assumes initial call will come immediately after next's definition:
         [counter -1])
     (λ ()
        (set! counter (+ 1 counter))
        (format "req:~a-~a-~a" start-time pid counter))))
 
-(define req-id-init (req-id-next))
-
-(define current-req-id (make-parameter req-id-init))
+(define current-req-id (make-parameter (req-id-next)))
 
 (define/contract (reply op code [body ""])
   (->* (output-port? (integer-in 100 599)) (string?) void?)
