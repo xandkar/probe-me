@@ -168,13 +168,13 @@
                           (* (request-mem-limit-mb) 1024 1024))
   (parameterize ([current-custodian acceptor-custodian])
     (define-values (ip op) (tcp-accept listener))
-    (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
-    (define req-id (req-id:next req-id-init client-addr client-port))
-    (eprintf "[~a] connection from ~a:~a~n"
-             req-id
-             client-addr
-             client-port)
     (thread (λ ()
+               (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
+               (define req-id (req-id:next req-id-init client-addr client-port))
+               (eprintf "[~a] connection from ~a:~a~n"
+                        req-id
+                        client-addr
+                        client-port)
                (dispatch ip op client-addr req-id)
                (close-input-port ip)
                (close-output-port op))))
