@@ -2,7 +2,7 @@
 
 ;; TODO Can req-id be stashed in some runtime location? parameter? thread tree?
 
-(require net/url) ; TODO prefix-in
+(require (prefix-in url: net/url))
 
 (require (prefix-in req-id: "req-id.rkt"))
 
@@ -59,8 +59,8 @@
            [(list meth path proto)
             ; TODO Handle string->url exceptions
             (let ([path (filter (λ (s) (not (string=? "" s)))
-                                (map path/param-path
-                                     (url-path (string->url path))))])
+                                (map url:path/param-path
+                                     (url:url-path (url:string->url path))))])
               (Req meth
                    path
                    proto
