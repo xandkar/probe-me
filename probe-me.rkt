@@ -176,28 +176,40 @@
 
 (define/contract (accept-and-dispatch listener)
   (-> tcp-listener? void?)
-  (define acceptor-custodian (make-custodian))
-  (custodian-limit-memory acceptor-custodian
-                          (* (request-mem-limit-mb) 1024 1024))
   (parameterize ([req-id-curr (req-id-next)])
-    (parameterize ([current-custodian acceptor-custodian])
-      (define-values (ip op) (tcp-accept listener))
-      (thread (λ ()
-                 (define req-id (req-id-curr))
-                 (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
-                 (eprintf "[~a] BEGIN: connected to ~a:~a~n"
-                          req-id
-                          client-addr
-                          client-port)
-                 (dispatch ip op client-addr)
-                 (close-input-port ip)
-                 (close-output-port op)
-                 (eprintf "[~a] disconnected~n" req-id))))
+    (define acceptor-custodian (make-custodian))
+    (custodian-limit-memory acceptor-custodian
+                            (* (request-mem-limit-mb) 1024 1024))
+    (define completed (make-channel))
+    (define timed-out (make-channel))
+    (define-values (t0 handler-thread)
+      (parameterize ([current-custodian acceptor-custodian])
+        (define-values (ip op) (tcp-accept listener))
+        (values (current-inexact-milliseconds)
+                (thread (λ ()
+                   (define req-id (req-id-curr))
+                   (match-define-values
+                     (_ _ client-addr client-port)
+                     (tcp-addresses ip #t))
+                   (eprintf "[~a] BEGIN: connected to ~a:~a~n"
+                            req-id
+                            client-addr
+                            client-port)
+                   (dispatch ip op client-addr)
+                   (close-input-port ip)
+                   (close-output-port op)
+                   (channel-put completed 'completed))))))
     (thread (λ ()
                (sleep (request-timeout))
+               (channel-put timed-out 'timed-out)))
+    (thread (λ ()
+               (define result (sync completed timed-out))
+               (define t1 (current-inexact-milliseconds))
+               (define duration (real->decimal-string (/ (- t1 t0) 1000) 3))
+               (eprintf "[~a] END: ~a in ~a seconds~n" (req-id-curr) result duration)
                (custodian-shutdown-all acceptor-custodian)
-               (eprintf "[~a] END: cleaned-up~n" (req-id-curr)))))
-  (void))
+               (kill-thread handler-thread)))
+    (void)))
 
 (define/contract (serve hostname port-num max-allow-wait reuse-port?)
   (-> string? listen-port-number? exact-nonnegative-integer? boolean? void?)
