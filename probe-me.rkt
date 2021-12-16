@@ -57,12 +57,16 @@
         [(string? req-line)
          (match (string-split req-line #rx" +")
            [(list meth path proto)
-            (Req meth
-                 (map path/param-path (url-path (string->url path))) ; TODO Handle exn
-                 proto
-                 (read-headers ip)
-                 from
-                 req-id)]
+            ; TODO Handle string->url exceptions
+            (let ([path (filter (λ (s) (not (string=? "" s)))
+                                (map path/param-path
+                                     (url-path (string->url path))))])
+              (Req meth
+                   path
+                   proto
+                   (read-headers ip)
+                   from
+                   req-id))]
            [_
              ; Invalid req line
              #f])]
@@ -146,7 +150,7 @@
 (define/contract (dispatch ip op client-addr req-id)
   (-> input-port? output-port? string? string? void?)
   (define req (read-req ip client-addr req-id))
-  (eprintf "[~a] request: ~a~n" req-id req)
+  (eprintf "[~a] request: ~s~n" req-id req)
   (match req
     [#f (reply req-id op 400)]
     [req (match (route (Req-path req))
@@ -160,9 +164,8 @@
 (define/contract (accept-and-dispatch listener req-id-init)
   (-> tcp-listener? string? void?)
   (define acceptor-custodian (make-custodian))
-  (define mem-limit 50)
-  (define timeout 10)
-  (custodian-limit-memory acceptor-custodian (* mem-limit 1024 1024))
+  (custodian-limit-memory acceptor-custodian
+                          (* (request-mem-limit-mb) 1024 1024))
   (parameterize ([current-custodian acceptor-custodian])
     (define-values (ip op) (tcp-accept listener))
     (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
@@ -176,19 +179,23 @@
                (close-input-port ip)
                (close-output-port op))))
   (thread (λ ()
-             (sleep timeout)
+             (sleep (request-timeout))
              (custodian-shutdown-all acceptor-custodian)))
   (void))
 
-(define/contract (serve port-num)
-  (-> listen-port-number? void?)
+(define/contract (serve hostname port-num max-allow-wait reuse-port?)
+  (-> string? listen-port-number? exact-nonnegative-integer? boolean? void?)
   (define server-custodian (make-custodian))
   (parameterize ([current-custodian server-custodian])
-    ; Maximum number of client connections that can be waiting for acceptance:
-    (define max-allow-wait 5)
-    ; create a listener even if the port is involved in a TIME_WAIT state?
-    (define reuse? #t)
-    (define listener (tcp-listen port-num max-allow-wait reuse?))
+    (define listener (tcp-listen port-num max-allow-wait reuse-port? hostname))
+    (eprintf
+      "Listening on ~a:~a. max-allow-wait: ~a, reuse-port?: ~a, request-timeout: ~a, request-mem-limit-mb: ~a~n"
+      hostname
+      port-num
+      max-allow-wait
+      reuse-port?
+      (request-timeout)
+      (request-mem-limit-mb))
     (define server
       (let ([req-id-init (req-id:init port-num)])
         (thread (λ () (let loop ()
@@ -196,6 +203,47 @@
                         (loop))))))
     (thread-wait server)))
 
+(define request-timeout (make-parameter 5))
+(define request-mem-limit-mb (make-parameter 1))
+
 (module+ main
-  ; TODO CLI opts
-  (serve 8080))
+  (let ([port-num       8080]
+        [max-allow-wait 5]
+        [reuse-port?    #t]
+        [hostname       "0.0.0.0"])
+
+    (command-line
+      #:program
+      "probe-me"
+
+      #:once-each
+      [("--host")
+       host-name-or-address "Hostname or address to listen on."
+       (set! hostname host-name-or-address)]
+      [("-p" "--port")
+       integer-from-0-to-65535 "TCP port to listen on."
+       (set! port-num (string->number integer-from-0-to-65535))]
+      [("--max-allow-wait")
+       nonnegative-integer
+       "Maximum number of client connections that can be waiting for acceptance."
+       (set! max-allow-wait (string->number nonnegative-integer))]
+      [("--request-timeout")
+       nonnegative-number "Seconds before terminating the request handler."
+       (request-timeout (string->number nonnegative-number))]
+      [("--request-mem-limit")
+       nonnegative-integer "Maximum memory allowed per request, in MB."
+       (request-mem-limit-mb (string->number nonnegative-integer))]
+
+      #:once-any
+      [("--reuse-port")
+       "Create a listener even if the port is involved in a TIME_WAIT state. (default)"
+       (set! reuse-port? #t)]
+      [("--no-reuse-port")
+       "Do NOT create a listener if the port is involved in a TIME_WAIT state."
+       (set! reuse-port? #f)]
+
+      #:args ()
+      (serve hostname
+             port-num
+             max-allow-wait
+             reuse-port?))))
