@@ -187,18 +187,18 @@
         (define-values (ip op) (tcp-accept listener))
         (values (current-inexact-milliseconds)
                 (thread (λ ()
-                   (define req-id (current-req-id))
-                   (match-define-values
-                     (_ _ client-addr client-port)
-                     (tcp-addresses ip #t))
-                   (eprintf "[~a] BEGIN: connected to ~a:~a~n"
-                            req-id
-                            client-addr
-                            client-port)
-                   (dispatch ip op client-addr)
-                   (close-input-port ip)
-                   (close-output-port op)
-                   (channel-put completed 'completed))))))
+                           (define req-id (current-req-id))
+                           (match-define-values
+                             (_ _ client-addr client-port)
+                             (tcp-addresses ip #t))
+                           (eprintf "[~a] BEGIN: connected to ~a:~a~n"
+                                    req-id
+                                    client-addr
+                                    client-port)
+                           (dispatch ip op client-addr)
+                           (close-input-port ip)
+                           (close-output-port op)
+                           (channel-put completed 'completed))))))
     (thread (λ ()
                (sleep (request-timeout))
                (channel-put timed-out 'timed-out)))
