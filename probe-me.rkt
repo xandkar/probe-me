@@ -164,15 +164,14 @@
   (define req-id (current-req-id))
   (define req (read-req ip client-addr))
   (eprintf "[~a] request: ~s~n" req-id req)
-  (match req
-    [#f (reply op 400)]
-    [req (match (route (Req-path req))
-           [#f (reply op 404)]
-           [handler (with-handlers
-                      ([any/c (λ (e)
-                                 (eprintf "[~a] handler crash: ~a~n" req-id e)
-                                 (reply op 500 ""))])
-                      (handler ip op req))])]))
+  (when req
+    (match (route (Req-path req))
+      [#f (reply op 404)]
+      [handler (with-handlers
+                 ([any/c (λ (e)
+                            (eprintf "[~a] handler crash: ~a~n" req-id e)
+                            (reply op 500 ""))])
+                 (handler ip op req))])))
 
 (define/contract (accept listener)
   (-> tcp-listener? void?)
