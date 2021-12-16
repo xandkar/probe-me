@@ -24,6 +24,13 @@
 
 (define req-handler? (-> input-port? output-port? Req/c void?))
 
+(struct Ok (data) #:transparent)
+(struct Error (data) #:transparent)
+
+(define (Result/c α β)
+  (or/c (struct/dc Ok [data α])
+        (struct/dc Error [data β])))
+
 
 (define phrases (hash 200 "OK"
                       400 "Bad Request"
@@ -68,33 +75,46 @@
           [(list _ k v) (r (cons (cons k v) headers))])]))
   (r '()))
 
+(define (str->url s)
+  (with-handlers*
+    ([exn:fail? (λ (e) #f)])
+    (url:string->url s)))
+
 (define/contract (read-req ip from)
-  (-> input-port? string? (or/c #f Req/c))
+  (-> input-port?
+      string?
+      (Result/c Req/c
+                (or/c (cons/c 'unsupported-protocol-version
+                              string?)
+                      'invalid-path
+                      'invalid-req-line
+                      'eof)))
   (define req-id (current-req-id))
   (define req-line (read-line ip 'return-linefeed))
-  (cond [(eof-object? req-line)
-         #f]
-        [(string? req-line)
-         (match (string-split req-line #rx" +")
-           [(list meth path-str proto)
-            (let* ([url (url:string->url path-str)] ; TODO Handle exceptions
-                   [path (map url:path/param-path (url:url-path url))]
-                   [query (url:url-query url)])
-              (eprintf "[~a] query: ~s~n" req-id query)
-              (Req meth
-                   path-str
-                   path
-                   query
-                   proto
-                   (read-headers ip)
-                   from
-                   req-id))]
-           [_
-             ; Invalid req line
-             #f])]
-        [else
-          (eprintf "[~a] WARN: req-line neither EOF nor string: ~v" req-id req-line)
-          #f]))
+  (eprintf "[~a] req line: ~s~n" req-id req-line)
+  (if (eof-object? req-line)
+      (Error 'eof)
+      (match (string-split (string-downcase req-line) #rx" +")
+        ; XXX Let path handlers worry about method validity?
+        [(list meth path-str (and proto (or "http/1.0" "http/1.1")))
+         (let ([url (str->url path-str)])
+           (if url
+               (let ([path (map url:path/param-path (url:url-path url))]
+                     [query (url:url-query url)])
+                 (eprintf "[~a] query: ~s~n" req-id query)
+                 (Ok (Req meth
+                          path-str
+                          path
+                          query
+                          proto
+                          (read-headers ip)
+                          from
+                          req-id)))
+               (Error 'invalid-path)))]
+        [(list _ _ proto)
+         (Error (cons 'unsupported-protocol-version proto))]
+        [_
+          (Error 'invalid-req-line)])))
 
 (define/contract (read-line/timeout ip timeout)
   (-> input-port? (and/c real? (not/c negative?)) (or/c #f string?))
@@ -151,7 +171,7 @@
   (define port-num (string->number (car (Req-path req))))
   (if (and port-num (port-number? port-num))
       (match (Req-meth req)
-        ["GET" (reply op
+        ["get" (reply op
                       200
                       (format "~a ~a ~a"
                               addr
@@ -172,16 +192,19 @@
 (define/contract (dispatch ip op client-addr)
   (-> input-port? output-port? string? void?)
   (define req-id (current-req-id))
-  (define req (read-req ip client-addr))
-  (eprintf "[~a] request: ~s~n" req-id req)
-  (when req
-    (match (route (Req-path req))
+  (define req-read-result (read-req ip client-addr))
+  (eprintf "[~a] request read result: ~s~n" req-id req-read-result)
+  (match req-read-result
+    [(Error 'eof) (void)]
+    [(Error _) (reply op 400)]
+    [(Ok req)
+     (match (route (Req-path req))
       [#f (reply op 404)]
       [handler (with-handlers
                  ([any/c (λ (e)
                             (eprintf "[~a] handler crash: ~a~n" req-id e)
                             (reply op 500 ""))])
-                 (handler ip op req))])))
+                 (handler ip op req))])]))
 
 (define/contract (accept listener)
   (-> tcp-listener? void?)
