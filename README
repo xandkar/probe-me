@@ -26,7 +26,7 @@ usage
 
 * uri: `http://$server_host:$server_port/$client_target_port`
 * method: `GET`
-* response body: `$client_address $client_target_port [up | down] [$service_banner]`
+* response body: `$client_address $client_target_port (up | down) [$service_banner]`
 
 #### example
 
