@@ -174,7 +174,7 @@
                                  (reply op 500 ""))])
                       (handler ip op req))])]))
 
-(define/contract (accept-and-dispatch listener)
+(define/contract (accept listener)
   (-> tcp-listener? void?)
   (parameterize ([current-req-id (req-id-next)])
     (define acceptor-custodian (make-custodian))
@@ -228,7 +228,7 @@
       (request-mem-limit-mb))
     (define server
       (thread (λ () (let loop ()
-                      (accept-and-dispatch listener)
+                      (accept listener)
                       (loop)))))
     (thread-wait server)))
 
