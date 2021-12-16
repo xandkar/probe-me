@@ -3,19 +3,27 @@
 (require (prefix-in url: net/url)
          (prefix-in os: racket/os))
 
-(define headers? (listof (cons/c string? string?)))
 
-(struct Req (meth path proto headers from req-id) #:transparent)
+(define (kvl/c k v) (listof (cons/c k v)))
+
+(define headers? (kvl/c string? string?))
+
+(define query? (kvl/c symbol? string?))
+
+(struct Req (meth path-str path query proto headers from req-id) #:transparent)
 
 (define Req/c (struct/dc Req
                          [meth string?]
+                         [path-str string?]
                          [path (listof string?)]
+                         [query query?]
                          [proto string?]
                          [headers headers?]
                          [from string?]
                          [req-id string?]))
 
 (define req-handler? (-> input-port? output-port? Req/c void?))
+
 
 (define phrases (hash 200 "OK"
                       400 "Bad Request"
@@ -68,13 +76,17 @@
          #f]
         [(string? req-line)
          (match (string-split req-line #rx" +")
-           [(list meth path proto)
-            ; TODO Handle string->url exceptions
-            (let ([path (filter (λ (s) (not (string=? "" s)))
-                                (map url:path/param-path
-                                     (url:url-path (url:string->url path))))])
+           [(list meth path-str proto)
+            (let* ([url (url:string->url path-str)] ; TODO Handle exceptions
+                   [path (filter (λ (s) (not (string=? "" s)))
+                                 (map url:path/param-path
+                                      (url:url-path url)))]
+                   [query (url:url-query url)])
+              (eprintf "[~a] query: ~s~n" req-id query)
               (Req meth
+                   path-str
                    path
+                   query
                    proto
                    (read-headers ip)
                    from
