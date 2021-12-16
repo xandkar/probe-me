@@ -1,6 +1,6 @@
 EXE = probe-me
 
-$(EXE): $(EXE).rkt req-id.rkt
+$(EXE): $(EXE).rkt
 	raco exe --orig-exe -o $@ $(EXE).rkt
 
 .PHONY: build

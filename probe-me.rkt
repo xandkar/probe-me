@@ -1,10 +1,7 @@
 #lang racket
 
-;; TODO Can req-id be stashed in some runtime location? parameter? thread tree?
-
-(require (prefix-in url: net/url))
-
-(require (prefix-in req-id: "req-id.rkt"))
+(require (prefix-in url: net/url)
+         (prefix-in os: racket/os))
 
 (define headers? (listof (cons/c string? string?)))
 
@@ -26,9 +23,23 @@
                       405 "Method Not Allowed"
                       500 "Internal Server Error"))
 
-(define/contract (reply req-id op code [body ""])
-  (->* (string? output-port? (integer-in 100 599)) (string?) void?)
-  (eprintf "[~a] response: ~a ~a~n" req-id code body)
+(define/contract req-id-next
+  (-> string?)
+  (let ([start-time (current-inexact-milliseconds)]
+        [pid (os:getpid)]
+        ; XXX -1 assumes init will call next immediately after next's definition:
+        [counter -1])
+    (λ ()
+       (set! counter (+ 1 counter))
+       (format "req:~a-~a-~a" start-time pid counter))))
+
+(define req-id-init (req-id-next))
+
+(define req-id-curr (make-parameter req-id-init))
+
+(define/contract (reply op code [body ""])
+  (->* (output-port? (integer-in 100 599)) (string?) void?)
+  (eprintf "[~a] response: ~a ~a~n" (req-id-curr) code body)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
           "Server: probe-me.xandkar"
@@ -49,8 +60,9 @@
           [(list _ k v) (r (cons (cons k v) headers))])]))
   (r '()))
 
-(define/contract (read-req ip from req-id)
-  (-> input-port? string? string? (or/c #f Req/c))
+(define/contract (read-req ip from)
+  (-> input-port? string? (or/c #f Req/c))
+  (define req-id (req-id-curr))
   (define req-line (read-line ip 'return-linefeed))
   (cond [(eof-object? req-line)
          #f]
@@ -88,8 +100,9 @@
   (-> string? string?)
   (string-drop-control-chars str))
 
-(define/contract (probe addr port-num req-id)
-  (-> string? number? string? (or/c boolean? string?))
+(define/contract (probe addr port-num)
+  (-> string? number? (or/c boolean? string?))
+  (define req-id (req-id-curr))
   (define up? #f)
   (define timeout-connect 5)  ; TODO Option
   (define timeout-read    1)  ; TODO Option
@@ -112,7 +125,7 @@
                          port-num))
                      (eprintf
                        "[~a] probe service banner read failed from ~a:~a~n"
-                         req-id
+                       req-id
                        addr
                        port-num))
                  (close-input-port ip)
@@ -123,23 +136,22 @@
 
 (define/contract (handle-probe ip op req)
   req-handler?
-  (define req-id (Req-req-id req))
+  (define req-id (req-id-curr))
   (define addr (Req-from req))
   (define port-num (string->number (car (Req-path req))))
   (if (and port-num (port-number? port-num))
       (match (Req-meth req)
-        ["GET" (reply req-id
-                      op
+        ["GET" (reply op
                       200
                       (format "~a ~a ~a"
                               addr
                               port-num
-                              (match (probe addr port-num (Req-req-id req))
+                              (match (probe addr port-num)
                                 [#f "down"]
                                 [#t "up"]
                                 [service-line (format "up ~a" service-line)])))]
-        [_ (reply req-id op 405)])
-      (reply req-id op 400 (format "Invalid port number: ~v" port-num))))
+        [_ (reply op 405)])
+      (reply op 400 (format "Invalid port number: ~v" port-num))))
 
 (define/contract (route path)
   (-> (listof string?) (or/c #f req-handler?))
@@ -147,40 +159,44 @@
     [(list n) #:when (regexp-match? #rx"^[0-9]+$" n) handle-probe]
     [_ #f]))
 
-(define/contract (dispatch ip op client-addr req-id)
-  (-> input-port? output-port? string? string? void?)
-  (define req (read-req ip client-addr req-id))
+(define/contract (dispatch ip op client-addr)
+  (-> input-port? output-port? string? void?)
+  (define req-id (req-id-curr))
+  (define req (read-req ip client-addr))
   (eprintf "[~a] request: ~s~n" req-id req)
   (match req
-    [#f (reply req-id op 400)]
+    [#f (reply op 400)]
     [req (match (route (Req-path req))
-           [#f (reply req-id op 404)]
+           [#f (reply op 404)]
            [handler (with-handlers
                       ([any/c (λ (e)
                                  (eprintf "[~a] handler crash: ~a~n" req-id e)
-                                 (reply req-id op 500 ""))])
+                                 (reply op 500 ""))])
                       (handler ip op req))])]))
 
-(define/contract (accept-and-dispatch listener req-id-init)
-  (-> tcp-listener? string? void?)
+(define/contract (accept-and-dispatch listener)
+  (-> tcp-listener? void?)
   (define acceptor-custodian (make-custodian))
   (custodian-limit-memory acceptor-custodian
                           (* (request-mem-limit-mb) 1024 1024))
-  (parameterize ([current-custodian acceptor-custodian])
-    (define-values (ip op) (tcp-accept listener))
+  (parameterize ([req-id-curr (req-id-next)])
+    (parameterize ([current-custodian acceptor-custodian])
+      (define-values (ip op) (tcp-accept listener))
+      (thread (λ ()
+                 (define req-id (req-id-curr))
+                 (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
+                 (eprintf "[~a] BEGIN: connected to ~a:~a~n"
+                          req-id
+                          client-addr
+                          client-port)
+                 (dispatch ip op client-addr)
+                 (close-input-port ip)
+                 (close-output-port op)
+                 (eprintf "[~a] disconnected~n" req-id))))
     (thread (λ ()
-               (match-define-values (_ _ client-addr client-port) (tcp-addresses ip #t))
-               (define req-id (req-id:next req-id-init client-addr client-port))
-               (eprintf "[~a] connection from ~a:~a~n"
-                        req-id
-                        client-addr
-                        client-port)
-               (dispatch ip op client-addr req-id)
-               (close-input-port ip)
-               (close-output-port op))))
-  (thread (λ ()
-             (sleep (request-timeout))
-             (custodian-shutdown-all acceptor-custodian)))
+               (sleep (request-timeout))
+               (custodian-shutdown-all acceptor-custodian)
+               (eprintf "[~a] END: cleaned-up~n" (req-id-curr)))))
   (void))
 
 (define/contract (serve hostname port-num max-allow-wait reuse-port?)
@@ -197,10 +213,9 @@
       (request-timeout)
       (request-mem-limit-mb))
     (define server
-      (let ([req-id-init (req-id:init port-num)])
-        (thread (λ () (let loop ()
-                        (accept-and-dispatch listener req-id-init)
-                        (loop))))))
+      (thread (λ () (let loop ()
+                      (accept-and-dispatch listener)
+                      (loop)))))
     (thread-wait server)))
 
 (define request-timeout (make-parameter 5))
