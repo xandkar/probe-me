@@ -1,6 +1,8 @@
 #lang racket
 
 (require (prefix-in url: net/url)
+         racket/date
+         racket/logging
          (prefix-in os: racket/os))
 
 
@@ -10,7 +12,9 @@
 
 (define query? (kvl/c symbol? string?))
 
-(struct Req (meth path-str path query proto headers from req-id) #:transparent)
+(define req-id? (and/c (cons/c 'req-id string?)))
+
+(struct Req (meth path-str path query proto headers from) #:transparent)
 
 (define Req/c (struct/dc Req
                          [meth string?]
@@ -19,8 +23,7 @@
                          [query query?]
                          [proto string?]
                          [headers headers?]
-                         [from string?]
-                         [req-id string?]))
+                         [from string?]))
 
 (define req-handler? (-> input-port? output-port? Req/c void?))
 
@@ -38,21 +41,47 @@
                       405 "Method Not Allowed"
                       500 "Internal Server Error"))
 
+
 (define/contract req-id-next
-  (-> string?)
+  (-> req-id?)
   (let ([start-time (current-inexact-milliseconds)]
         [pid (os:getpid)]
-        ; XXX -1 assumes initial call will come immediately after next's definition:
-        [counter -1])
+        [counter 0])
     (λ ()
        (set! counter (+ 1 counter))
-       (format "req:~a-~a-~a" start-time pid counter))))
+       (cons 'req-id (format "req:~a-~a-~a" start-time pid counter)))))
 
-(define current-req-id (make-parameter (req-id-next)))
+(define current-req-id (make-parameter #f))
+
+(define/contract (logger-start level)
+  (-> log-level/c void?)
+  (define logger (make-logger #f #f level #f))
+  (define log-receiver (make-log-receiver logger level))
+  (current-logger logger)
+  (define (log-writer)
+    (parameterize ([date-display-format 'iso-8601])
+      (let loop ()
+        (match-define (vector level msg req-id topic) (sync log-receiver))
+        (eprintf "~a [~a]~a ~a~n"
+                 (date->string (current-date) #t)
+                 level
+                 (match req-id
+                   [(cons 'req-id id) (format " [~a]" id)]
+                   [_ ""])
+                 msg)
+        (loop))))
+  (void (thread log-writer)))
+
+(define (log-debug fmt . args)
+  (log-message (current-logger)
+               'debug
+               (apply format (cons fmt args))
+               (current-req-id)
+               #f))
 
 (define/contract (reply op code [body ""])
   (->* (output-port? (integer-in 100 599)) (string?) void?)
-  (eprintf "[~a] response: ~a ~a~n" (current-req-id) code body)
+  (log-debug "response: ~a ~a" code body)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
           "Server: probe-me.xandkar"
@@ -87,9 +116,8 @@
                       'invalid-path
                       'invalid-req-line
                       'eof)))
-  (define req-id (current-req-id))
   (define req-line (read-line ip 'return-linefeed))
-  (eprintf "[~a] req line: ~s~n" req-id req-line)
+  (log-debug "req line: ~v" req-line)
   (if (eof-object? req-line)
       (Error 'eof)
       (match (string-split (string-downcase req-line) #rx" +")
@@ -99,15 +127,14 @@
            (if url
                (let ([path (map url:path/param-path (url:url-path url))]
                      [query (url:url-query url)])
-                 (eprintf "[~a] query: ~s~n" req-id query)
+                 (log-debug "query: ~s" query)
                  (Ok (Req meth
                           path-str
                           path
                           query
                           proto
                           (read-headers ip)
-                          from
-                          req-id)))
+                          from)))
                (Error 'invalid-path)))]
         [(list _ _ proto)
          (Error (cons 'unsupported-protocol-version proto))]
@@ -130,7 +157,6 @@
 
 (define/contract (probe addr port-num)
   (-> string? number? (or/c boolean? string?))
-  (define req-id (current-req-id))
   (define up? #f)
   (define timeout-connect 5)  ; TODO Option
   (define timeout-read    1)  ; TODO Option
@@ -140,31 +166,28 @@
                (with-handlers
                  ([exn:fail:network? (λ (_) (void))])
                  (define-values (ip op) (tcp-connect addr port-num))
-                 (eprintf "[~a] probe connection succeeded to ~a:~a~n" req-id addr port-num)
+                 (log-debug "probe connection succeeded to ~a:~a" addr port-num)
                  (set! up? #t)
                  (define service-line (read-line/timeout ip timeout-read))
                  (if service-line
                      (begin
                        (set! up? (service-line-normalize service-line))
-                       (eprintf
-                         "[~a] probe service banner read succeeded from ~a:~a~n"
-                         req-id
+                       (log-debug
+                         "probe service banner read succeeded from ~a:~a"
                          addr
                          port-num))
-                     (eprintf
-                       "[~a] probe service banner read failed from ~a:~a~n"
-                       req-id
+                     (log-debug
+                       "probe service banner read failed from ~a:~a"
                        addr
                        port-num))
                  (close-input-port ip)
                  (close-output-port op)))))
   (unless up?
-    (eprintf "[~a] probe connection failed to ~a:~a~n" req-id addr port-num))
+    (log-debug "probe connection failed to ~a:~a" addr port-num))
   up?)
 
 (define/contract (handle-probe ip op req)
   req-handler?
-  (define req-id (current-req-id))
   (define addr (Req-from req))
   (define port-num (string->number (car (Req-path req))))
   (if (and port-num (port-number? port-num))
@@ -189,20 +212,19 @@
 
 (define/contract (dispatch ip op client-addr)
   (-> input-port? output-port? string? void?)
-  (define req-id (current-req-id))
   (define req-read-result (read-req ip client-addr))
-  (eprintf "[~a] request read result: ~s~n" req-id req-read-result)
+  (log-debug "request read result: ~s" req-read-result)
   (match req-read-result
     [(Error 'eof) (void)]
     [(Error _) (reply op 400)]
     [(Ok req)
      (match (route (Req-path req))
-      [#f (reply op 404)]
-      [handler (with-handlers
-                 ([any/c (λ (e)
-                            (eprintf "[~a] handler crash: ~a~n" req-id e)
-                            (reply op 500 ""))])
-                 (handler ip op req))])]))
+       [#f (reply op 404)]
+       [handler (with-handlers
+                  ([any/c (λ (e)
+                             (log-debug "handler crash: ~a" e)
+                             (reply op 500 ""))])
+                  (handler ip op req))])]))
 
 (define/contract (accept listener)
   (-> tcp-listener? void?)
@@ -217,14 +239,12 @@
         (define-values (ip op) (tcp-accept listener))
         (values (current-inexact-milliseconds)
                 (thread (λ ()
-                           (define req-id (current-req-id))
                            (match-define-values
                              (_ _ client-addr client-port)
                              (tcp-addresses ip #t))
-                           (eprintf "[~a] BEGIN: connected to ~a:~a~n"
-                                    req-id
-                                    client-addr
-                                    client-port)
+                           (log-debug "BEGIN: connected to ~a:~a"
+                                      client-addr
+                                      client-port)
                            (dispatch ip op client-addr)
                            (close-input-port ip)
                            (close-output-port op)
@@ -235,10 +255,9 @@
     (thread (λ ()
                (define result (sync completed timed-out))
                (define t1 (current-inexact-milliseconds))
-               (eprintf "[~a] END: ~a in ~a seconds~n"
-                        (current-req-id)
-                        result
-                        (real->decimal-string (/ (- t1 t0) 1000) 3))
+               (log-debug "END: ~a in ~a seconds"
+                          result
+                          (real->decimal-string (/ (- t1 t0) 1000) 3))
                (custodian-shutdown-all acceptor-custodian)
                (kill-thread handler-thread)))
     (void)))
@@ -248,8 +267,8 @@
   (define server-custodian (make-custodian))
   (parameterize ([current-custodian server-custodian])
     (define listener (tcp-listen port-num max-allow-wait reuse-port? hostname))
-    (eprintf
-      "Listening on ~a:~a. max-allow-wait: ~a, reuse-port?: ~a, request-timeout: ~a, request-mem-limit-mb: ~a~n"
+    (log-info
+      "Listening on ~a:~a. max-allow-wait: ~a, reuse-port?: ~a, request-timeout: ~a, request-mem-limit-mb: ~a"
       hostname
       port-num
       max-allow-wait
@@ -302,6 +321,7 @@
        (set! reuse-port? #f)]
 
       #:args ()
+      (logger-start 'debug)
       (serve hostname
              port-num
              max-allow-wait
