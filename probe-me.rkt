@@ -12,7 +12,7 @@
 
 (define query? (kvl/c symbol? string?))
 
-(define req-id? (and/c (cons/c 'req-id string?)))
+(define req-id? (cons/c 'req-id string?))
 
 (struct Req (meth path-str path query proto headers from) #:transparent)
 
