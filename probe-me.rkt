@@ -5,12 +5,15 @@
          racket/logging
          (prefix-in os: racket/os))
 
+(module+ test
+  (require rackunit))
+
 
 (define (kvl/c k v) (listof (cons/c k v)))
 
 (define headers? (kvl/c string? string?))
 
-(define query? (kvl/c symbol? string?))
+(define query? (kvl/c symbol? (or/c #f string?)))
 
 (define req-id? (cons/c 'req-id string?))
 
@@ -140,6 +143,16 @@
          (Error (cons 'unsupported-protocol-version proto))]
         [_
           (Error 'invalid-req-line)])))
+
+(module+ test
+  (define (read-req-str str from)
+    (read-req (open-input-string str) from))
+
+  (check-equal?
+    (let* ([key 'key-but-no-val]
+           [req-line (format "GET http://path?~a HTTP/1.0\r\n" key)])
+      (dict-ref (Req-query (Ok-data (read-req-str req-line "localhost"))) key))
+    #f))
 
 (define/contract (read-line/timeout ip timeout)
   (-> input-port? (and/c real? (not/c negative?)) (or/c #f string?))
