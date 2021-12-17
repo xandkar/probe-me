@@ -1,7 +1,8 @@
 probe-me
 ========
 
-TCP port probing microservice.
+TCP port probing microservice for lightweight perimeter monitoring.
+"Is my port forwarding setup still working?"
 
 Originally [@asinovski][1]'s idea for lightweight [Helium][2] [Miner][3]
 monitoring service, but generalized for miscellaneous self-probing fun.
