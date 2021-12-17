@@ -84,7 +84,7 @@
 
 (define/contract (reply op code [body ""])
   (->* (output-port? (integer-in 100 599)) (string?) void?)
-  (log-debug "response: ~a ~a" code body)
+  (log-debug "begin response: ~a ~a" code body)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
           "Server: probe-me.xandkar"
@@ -92,7 +92,8 @@
           ""
           body)
     op
-    #:separator "\r\n"))
+    #:separator "\r\n")
+  (log-debug "end response"))
 
 (define/contract (read-headers ip)
   (-> input-port? headers?)
