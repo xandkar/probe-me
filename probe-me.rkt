@@ -44,6 +44,8 @@
                       405 "Method Not Allowed"
                       500 "Internal Server Error"))
 
+(define targets (make-hash))
+(define history (make-hash))
 
 (define/contract req-id-next
   (-> req-id?)
@@ -218,10 +220,38 @@
         [_ (reply op 405)])
       (reply op 400 (format "Invalid port number: ~v" port-num))))
 
-(define/contract (route path)
-  (-> (listof string?) (or/c #f req-handler?))
-  (match path
-    [(list n) #:when (regexp-match? #rx"^[0-9]+$" n) handle-probe]
+(define/contract (handle-register ip op req)
+  req-handler?
+  (define addr (Req-from req))
+  (define port (string->number (car (Req-path req))))
+  (hash-update! targets addr (λ (ports) (set-add ports port)) (set))
+  (define resp-body
+    (string-join (map number->string (set->list (hash-ref targets addr))) "\n"))
+  (reply op 200 resp-body))
+
+(define/contract (handle-history ip op req)
+  req-handler?
+  (define addr (Req-from req))
+  (define port (string->number (car (Req-path req))))
+  (define addr-hist (hash-ref history (cons addr port) '()))
+  (define resp-body
+    (string-join
+      (map (match-lambda
+             [(list t s b) (format "~a ~a ~a" t s b)]
+             [(list t s  ) (format "~a ~a"    t s)])
+           addr-hist)
+      "\n"))
+  (reply op 200 resp-body))
+
+(define/contract (route req)
+  (-> Req/c (or/c #f req-handler?))
+  (match req
+    [(struct* Req ([path (list n)] [query q])) #:when (regexp-match? #rx"^[0-9]+$" n)
+     (match q
+       ['() handle-probe]
+       ['((register . #f)) handle-register]
+       ['((history  . #f)) handle-history]
+       [_ #f])]
     [_ #f]))
 
 (define/contract (dispatch ip op client-addr)
@@ -232,7 +262,7 @@
     [(Error 'eof) (void)]
     [(Error _) (reply op 400)]
     [(Ok req)
-     (match (route (Req-path req))
+     (match (route req)
        [#f (reply op 404)]
        [handler (with-handlers
                   ([any/c (λ (e)
@@ -276,6 +306,21 @@
                (kill-thread handler-thread)))
     (void)))
 
+(define (execute-background-probes)
+  (define (probe-and-record addr ports)
+    (set-for-each
+      ports
+      (λ (port)
+         (define status
+           (match (probe addr port)
+             [#f     '(down "")]
+             [#t     '(up "")]
+             [banner `(up ,banner)]))
+         (define time (current-inexact-milliseconds))
+         (define curr (cons time status))
+         (hash-update! history (cons addr port) (λ (prev) (cons curr prev)) '()))))
+  (hash-for-each targets probe-and-record))
+
 (define/contract (serve hostname port-num max-allow-wait reuse-port?)
   (-> string? listen-port-number? exact-nonnegative-integer? boolean? void?)
   (define server-custodian (make-custodian))
@@ -289,11 +334,14 @@
       reuse-port?
       (request-timeout)
       (request-mem-limit-mb))
-    (define server
-      (thread (λ () (let loop ()
-                      (accept listener)
-                      (loop)))))
-    (thread-wait server)))
+    ; TODO Supervisors: restarts and restart rate limits.
+    (sync (thread (λ () (let loop ()
+                          (accept listener)
+                          (loop))))
+          (thread (λ () (let loop ()
+                          (execute-background-probes)
+                          (sleep (* 15 60)) ; TODO Interval parameter/option
+                          (loop)))))))
 
 (define request-timeout (make-parameter 5))
 (define request-mem-limit-mb (make-parameter 1))
