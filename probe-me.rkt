@@ -1,6 +1,7 @@
 #lang racket
 
-(require (prefix-in url: net/url)
+(require (prefix-in sendmail: net/sendmail)
+         (prefix-in url: net/url)
          racket/date
          racket/logging
          (prefix-in os: racket/os))
@@ -45,6 +46,7 @@
                       500 "Internal Server Error"))
 
 (define targets (make-hash))
+(define emails  (make-hash))
 (define history (make-hash))
 
 (define/contract req-id-next
@@ -222,11 +224,14 @@
 
 (define/contract (handle-register ip op req)
   req-handler?
-  (define addr (Req-from req))
+  (define addr-email (dict-ref (Req-query req) 'register))
+  (define addr-target (Req-from req))
   (define port (string->number (car (Req-path req))))
-  (hash-update! targets addr (λ (ports) (set-add ports port)) (set))
+  (when addr-email
+    hash-set! emails addr-target addr-email)
+  (hash-update! targets addr-target (λ (ports) (set-add ports port)) (set))
   (define resp-body
-    (string-join (map number->string (set->list (hash-ref targets addr))) "\n"))
+    (string-join (map number->string (set->list (hash-ref targets addr-target))) "\n"))
   (reply op 200 resp-body))
 
 (define/contract (handle-history ip op req)
@@ -249,7 +254,7 @@
     [(struct* Req ([path (list n)] [query q])) #:when (regexp-match? #rx"^[0-9]+$" n)
      (match q
        ['() handle-probe]
-       ['((register . #f)) handle-register]
+       [(list (cons 'register _)) handle-register]
        ['((history  . #f)) handle-history]
        [_ #f])]
     [_ #f]))
@@ -316,6 +321,17 @@
              [#f     '(down "")]
              [#t     '(up "")]
              [banner `(up ,banner)]))
+         (when (equal? 'down (car status))
+           (define addr-email (hash-ref emails addr #f))
+           (when addr-email
+             (thread (λ ()
+                        (sendmail:send-mail-message
+                          "probe-me <noreply@probe-me>"
+                          (format "Your host:port is down: ~a:~a [EOM]" addr port)
+                          '(,addr-email)
+                          '()
+                          '()
+                          '())))))
          (define time (current-inexact-milliseconds))
          (define curr (cons time status))
          (hash-update! history (cons addr port) (λ (prev) (cons curr prev)) '()))))
