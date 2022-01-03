@@ -1,4 +1,4 @@
-EXE = probe-me
+EXE := probe-me
 
 $(EXE): $(EXE).rkt
 	raco exe --orig-exe -o $@ $(EXE).rkt
