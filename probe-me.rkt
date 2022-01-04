@@ -49,6 +49,8 @@
 (define emails  (make-hash))
 (define history (make-hash))
 
+(define current-background-probe-interval-minutes (make-parameter 15))
+
 (define/contract req-id-next
   (-> req-id?)
   (let ([start-time (current-inexact-milliseconds)]
@@ -356,7 +358,7 @@
                           (loop))))
           (thread (λ () (let loop ()
                           (execute-background-probes)
-                          (sleep (* 15 60)) ; TODO Interval parameter/option
+                          (sleep (* 60 (current-background-probe-interval-minutes)))
                           (loop)))))))
 
 (define request-timeout (make-parameter 5))
@@ -389,6 +391,11 @@
       [("--request-mem-limit")
        nonnegative-integer "Maximum memory allowed per request, in MB."
        (request-mem-limit-mb (string->number nonnegative-integer))]
+      [("-i" "--bg-probe-interval")
+       positive-integer "Background probe interval in minutes."
+       (let ([minutes (string->number positive-integer)])
+         (invariant-assertion positive-integer? minutes)
+         (current-background-probe-interval-minutes minutes))]
 
       #:once-any
       [("--reuse-port")
