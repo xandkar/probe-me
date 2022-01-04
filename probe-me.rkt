@@ -237,16 +237,21 @@
     (string-join (map number->string (set->list (hash-ref targets addr-target))) "\n"))
   (reply op 200 resp-body))
 
+(define (epoch->string milliseconds)
+  (parameterize ([date-display-format 'iso-8601])
+    (date->string (seconds->date (* 0.001 milliseconds)) #t)))
+
 (define/contract (handle-history ip op req)
   req-handler?
   (define addr (Req-from req))
   (define port (string->number (car (Req-path req))))
   (define addr-hist (hash-ref history (cons addr port) '()))
+  (define e->s epoch->string)
   (define resp-body
     (string-join
       (map (match-lambda
-             [(list t s b) (format "~a ~a ~a" t s b)]
-             [(list t s  ) (format "~a ~a"    t s)])
+             [(list t s b) (format "~a ~a ~a" (e->s t) s b)]
+             [(list t s  ) (format "~a ~a"    (e->s t) s  )])
            addr-hist)
       "\n"))
   (reply op 200 resp-body))
