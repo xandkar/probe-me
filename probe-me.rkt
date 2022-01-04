@@ -1,3 +1,4 @@
+;;; TODO persistance with unix dbm https://docs.racket-lang.org/dbm/
 #lang racket
 
 (require (prefix-in sendmail: net/sendmail)
