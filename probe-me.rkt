@@ -326,16 +326,16 @@
          (when (equal? 'down (car status))
            (define addr-email (hash-ref emails addr #f))
            (when addr-email
-             (thread (λ ()
-                        (define to `(,addr-email))
-                        (log-debug "sending down alert to ~a" to)
-                        (sendmail:send-mail-message
-                          "probe-me <noreply@probe-me>"
-                          (format "Your host is down: ~a:~a [EOM]" addr port)
-                          to
-                          '()
-                          '()
-                          '())))))
+             (thread
+               (λ ()
+                  (define from "probe-me <noreply@probe-me>")
+                  (define subject (format "Your host is down: ~a:~a [EOM]" addr port))
+                  (define to `(,addr-email))
+                  (define cc '())
+                  (define bcc '())
+                  (define body '())
+                  (log-debug "sending down alert to ~a" to)
+                  (sendmail:send-mail-message from subject to cc bcc body)))))
          (define time (current-inexact-milliseconds))
          (define curr (cons time status))
          (hash-update! history (cons addr port) (λ (prev) (cons curr prev)) '()))))
