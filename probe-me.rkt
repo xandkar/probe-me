@@ -230,7 +230,7 @@
   (define addr-target (Req-from req))
   (define port (string->number (car (Req-path req))))
   (when addr-email
-    hash-set! emails addr-target addr-email)
+    (hash-set! emails addr-target addr-email))
   (hash-update! targets addr-target (λ (ports) (set-add ports port)) (set))
   (define resp-body
     (string-join (map number->string (set->list (hash-ref targets addr-target))) "\n"))
@@ -327,10 +327,12 @@
            (define addr-email (hash-ref emails addr #f))
            (when addr-email
              (thread (λ ()
+                        (define to `(,addr-email))
+                        (log-debug "sending down alert to ~a" to)
                         (sendmail:send-mail-message
                           "probe-me <noreply@probe-me>"
-                          (format "Your host:port is down: ~a:~a [EOM]" addr port)
-                          '(,addr-email)
+                          (format "Your host is down: ~a:~a [EOM]" addr port)
+                          to
                           '()
                           '()
                           '())))))
