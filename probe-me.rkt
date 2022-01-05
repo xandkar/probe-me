@@ -58,10 +58,10 @@
 
 (define/contract (db-fetch bucket k)
   (-> string? string? (or/c #f string?))
-  (match (db-fetch* bucket k)
-    ['() #f]
-    [(list v) v]
-    [_ (assert-unreachable)]))
+  (define path (build-path "db" bucket k))
+  (if (file-exists? path)
+      (file->string path)
+      #f))
 
 (define/contract (db-fetch* bucket k)
   (-> string? string? (listof string?))
