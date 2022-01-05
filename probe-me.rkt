@@ -1,4 +1,4 @@
-;;; TODO persistance with unix dbm https://docs.racket-lang.org/dbm/
+;;; TODO cache last probe result and only probe once per time period
 #lang racket
 
 (require (prefix-in sendmail: net/sendmail)
@@ -46,9 +46,59 @@
                       405 "Method Not Allowed"
                       500 "Internal Server Error"))
 
-(define targets (make-hash))
-(define emails  (make-hash))
-(define history (make-hash))
+(define/contract (db-store bucket k v)
+  (-> string? string? string? void?)
+  (db-store* bucket k (list v)))
+
+(define/contract (db-store* bucket k vs)
+  (-> string? string? (listof string?) void?)
+  (define path (build-path "db" bucket k))
+  (make-parent-directory* path)
+  (display-lines-to-file vs path #:exists 'replace))
+
+(define/contract (db-fetch bucket k)
+  (-> string? string? (or/c #f string?))
+  (match (db-fetch* bucket k)
+    ['() #f]
+    [(list v) v]
+    [_ (assert-unreachable)]))
+
+(define/contract (db-fetch* bucket k)
+  (-> string? string? (listof string?))
+  (define path (build-path "db" bucket k))
+  (if (file-exists? path)
+      (file->lines path)
+      '()))
+
+(define/contract (db-list-keys bucket)
+  (-> string? (listof string?))
+  (define path (build-path "db" bucket))
+  (make-directory* path)
+  (map path->string (directory-list path)))
+
+(define/contract (db-append bucket k v)
+  (-> string? string? string? void?)
+  (define path (build-path "db" bucket k))
+  (make-parent-directory* path)
+  (display-lines-to-file (list v) path #:exists 'append))
+
+(define/contract (history-key addr port)
+  (-> string? positive-integer? string?)
+  (format "~a:~a.log" addr port))
+
+(define/contract (history-fetch addr port)
+  (-> string? positive-integer? (or/c #f string?))
+  (db-fetch "history" (history-key addr port)))
+
+(define/contract (history-append addr port up?)
+  (-> string? positive-integer? (or/c boolean? string?) void?)
+  (define time (current-inexact-milliseconds))
+  (define status
+    (string-join (list* (epoch->string time)
+                        (number->string time)
+                        (if up? "up" "down")
+                        (if (string? up?) (list up?) '()))))
+  (db-append "history" (history-key addr port) status))
 
 (define current-background-probe-interval-minutes (make-parameter 15))
 
@@ -207,6 +257,23 @@
     (log-debug "probe connection failed to ~a:~a" addr port-num))
   up?)
 
+(define target-ports? (set/c positive-integer?))
+
+(define/contract (target-ports-store addr ports)
+  (-> string? target-ports? void?)
+  (db-store* "targets" addr (sort (map number->string (set->list ports)) <)))
+
+(define/contract (target-ports-fetch addr)
+  (-> string? target-ports?)
+  (define ports (map string->number (db-fetch* "targets" addr)))
+  (if (andmap positive-integer? ports)
+      (list->set ports)
+      (set))) ; TODO Maybe log that we saw errors and reset the value?
+
+(define/contract (target-ports-add addr port)
+  (-> string? positive-integer? void?)
+  (target-ports-store addr (set-add (target-ports-fetch addr) port)))
+
 (define/contract (handle-probe ip op req)
   req-handler?
   (define addr (Req-from req))
@@ -230,12 +297,9 @@
   (define addr-email (dict-ref (Req-query req) 'register))
   (define addr-target (Req-from req))
   (define port (string->number (car (Req-path req))))
-  (when addr-email
-    (hash-set! emails addr-target addr-email))
-  (hash-update! targets addr-target (λ (ports) (set-add ports port)) (set))
-  (define resp-body
-    (string-join (map number->string (set->list (hash-ref targets addr-target))) "\n"))
-  (reply op 200 resp-body))
+  (when addr-email (db-store "emails" addr-target addr-email))
+  (target-ports-add addr-target port)
+  (reply op 200 (db-fetch "targets" addr-target)))
 
 (define (epoch->string milliseconds)
   (parameterize ([date-display-format 'iso-8601])
@@ -245,16 +309,8 @@
   req-handler?
   (define addr (Req-from req))
   (define port (string->number (car (Req-path req))))
-  (define addr-hist (hash-ref history (cons addr port) '()))
-  (define e->s epoch->string)
-  (define resp-body
-    (string-join
-      (map (match-lambda
-             [(list t s b) (format "~a ~a ~a" (e->s t) s b)]
-             [(list t s  ) (format "~a ~a"    (e->s t) s  )])
-           addr-hist)
-      "\n"))
-  (reply op 200 resp-body))
+  (define hist (history-fetch addr port))
+  (reply op 200 (if hist hist "")))
 
 (define/contract (route req)
   (-> Req/c (or/c #f req-handler?))
@@ -324,13 +380,9 @@
     (set-for-each
       ports
       (λ (port)
-         (define status
-           (match (probe addr port)
-             [#f     '(down "")]
-             [#t     '(up "")]
-             [banner `(up ,banner)]))
-         (when (equal? 'down (car status))
-           (define addr-email (hash-ref emails addr #f))
+         (define up? (probe addr port))
+         (unless up?
+           (define addr-email (db-fetch "emails" addr))
            (when addr-email
              (thread
                (λ ()
@@ -342,10 +394,10 @@
                   (define body '())
                   (log-debug "sending down alert to ~a" to)
                   (sendmail:send-mail-message from subject to cc bcc body)))))
-         (define time (current-inexact-milliseconds))
-         (define curr (cons time status))
-         (hash-update! history (cons addr port) (λ (prev) (cons curr prev)) '()))))
-  (hash-for-each targets probe-and-record))
+         (history-append addr port up?))))
+  (for-each
+    (λ (addr) (probe-and-record addr (target-ports-fetch addr)))
+    (db-list-keys "targets")))
 
 (define/contract (serve hostname port-num max-allow-wait reuse-port?)
   (-> string? listen-port-number? exact-nonnegative-integer? boolean? void?)
