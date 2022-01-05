@@ -126,7 +126,7 @@
              #:bucket "history"
              #:key (history-key addr port)
              #:val (string-join (list* (epoch->string time)
-                                       (number->string time)
+                                       (number->string (truncate time))
                                        (if up? "up" "down")
                                        (if (string? up?) (list up?) '())))))
 
