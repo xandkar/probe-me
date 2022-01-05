@@ -46,41 +46,68 @@
                       405 "Method Not Allowed"
                       500 "Internal Server Error"))
 
-(define/contract (db-store bucket k v)
-  (-> string? string? string? void?)
-  (db-store* bucket k (list v)))
+(define current-db-conn (make-parameter "db"))
 
-(define/contract (db-store* bucket k vs)
-  (-> string? string? (listof string?) void?)
-  (define path (build-path "db" bucket k))
-  (make-parent-directory* path)
-  (display-lines-to-file vs path #:exists 'replace))
+;; TODO IO errors
+(define-signature db^
+  ((contracted
+     [conn?     (-> any/c boolean?)]
+     [list-keys (-> conn? #:bucket string? (listof string?))]
 
-(define/contract (db-fetch bucket k)
-  (-> string? string? (or/c #f string?))
-  (define path (build-path "db" bucket k))
-  (if (file-exists? path)
-      (file->string path)
-      #f))
+     ; blob
+     [store     (-> conn? #:bucket string? #:key string? #:val string? void?)]
+     [fetch     (-> conn? #:bucket string? #:key string? (or/c #f string?))]
 
-(define/contract (db-fetch* bucket k)
-  (-> string? string? (listof string?))
-  (define path (build-path "db" bucket k))
-  (if (file-exists? path)
-      (file->lines path)
-      '()))
+     ; list
+     [store*    (-> conn? #:bucket string? #:key string? #:vals (listof string?) void?)]
+     [fetch*    (-> conn? #:bucket string? #:key string? (listof string?))]
 
-(define/contract (db-list-keys bucket)
-  (-> string? (listof string?))
-  (define path (build-path "db" bucket))
-  (make-directory* path)
-  (map path->string (directory-list path)))
+     ; log
+     [append    (-> conn? #:bucket string? #:key string? #:val string? void?)]
+     )))
 
-(define/contract (db-append bucket k v)
-  (-> string? string? string? void?)
-  (define path (build-path "db" bucket k))
-  (make-parent-directory* path)
-  (display-lines-to-file (list v) path #:exists 'append))
+(define-unit fsdb@
+  (import)
+  (export db^)
+
+  (define conn? path-string?)
+
+  (define (store dir #:bucket b #:key k #:val v)
+    (define path (build-path dir b k))
+    (make-parent-directory* path)
+    (display-to-file v path #:exists 'replace))
+
+  (define (store* dir #:bucket b #:key k #:vals vs)
+    (define path (build-path dir b k))
+    (make-parent-directory* path)
+    (display-lines-to-file vs path #:exists 'replace))
+
+  (define (fetch dir #:bucket b #:key k)
+    (define path (build-path dir b k))
+    (if (file-exists? path)
+        (file->string path)
+        #f))
+
+  (define (fetch* dir #:bucket b #:key k)
+    (define path (build-path dir b k))
+    (if (file-exists? path)
+        (file->lines path)
+        '()))
+
+  (define (list-keys dir #:bucket b)
+    (define path (build-path dir b))
+    (make-directory* path)
+    (map path->string (directory-list path)))
+
+  (define (append dir #:bucket b #:key k #:val v)
+    (define path (build-path dir b k))
+    (make-parent-directory* path)
+    (display-lines-to-file (list v) path #:exists 'append)))
+
+(define-values/invoke-unit
+  fsdb@
+  (import)
+  (export (prefix db: db^)))
 
 (define/contract (history-key addr port)
   (-> string? positive-integer? string?)
@@ -88,17 +115,20 @@
 
 (define/contract (history-fetch addr port)
   (-> string? positive-integer? (or/c #f string?))
-  (db-fetch "history" (history-key addr port)))
+  (db:fetch (current-db-conn)
+            #:bucket "history"
+            #:key (history-key addr port)))
 
 (define/contract (history-append addr port up?)
   (-> string? positive-integer? (or/c boolean? string?) void?)
   (define time (current-inexact-milliseconds))
-  (define status
-    (string-join (list* (epoch->string time)
-                        (number->string time)
-                        (if up? "up" "down")
-                        (if (string? up?) (list up?) '()))))
-  (db-append "history" (history-key addr port) status))
+  (db:append (current-db-conn)
+             #:bucket "history"
+             #:key (history-key addr port)
+             #:val (string-join (list* (epoch->string time)
+                                       (number->string time)
+                                       (if up? "up" "down")
+                                       (if (string? up?) (list up?) '())))))
 
 (define current-background-probe-interval-minutes (make-parameter 15))
 
@@ -261,11 +291,16 @@
 
 (define/contract (target-ports-store addr ports)
   (-> string? target-ports? void?)
-  (db-store* "targets" addr (sort (map number->string (set->list ports)) <)))
+  (db:store* (current-db-conn)
+             #:bucket "targets"
+             #:key addr
+             #:vals (sort (map number->string (set->list ports)) <)))
 
 (define/contract (target-ports-fetch addr)
   (-> string? target-ports?)
-  (define ports (map string->number (db-fetch* "targets" addr)))
+  (define ports
+    (map string->number
+         (db:fetch* (current-db-conn) #:bucket "targets" #:key addr)))
   (if (andmap positive-integer? ports)
       (list->set ports)
       (set))) ; TODO Maybe log that we saw errors and reset the value?
@@ -297,9 +332,15 @@
   (define addr-email (dict-ref (Req-query req) 'register))
   (define addr-target (Req-from req))
   (define port (string->number (car (Req-path req))))
-  (when addr-email (db-store "emails" addr-target addr-email))
+  (when addr-email
+    (db:store (current-db-conn)
+              #:bucket "emails"
+              #:key addr-target
+              #:val addr-email))
   (target-ports-add addr-target port)
-  (reply op 200 (db-fetch "targets" addr-target)))
+  (reply op 200 (db:fetch (current-db-conn)
+                          #:bucket "targets"
+                          #:key addr-target)))
 
 (define (epoch->string milliseconds)
   (parameterize ([date-display-format 'iso-8601])
@@ -382,7 +423,8 @@
       (λ (port)
          (define up? (probe addr port))
          (unless up?
-           (define addr-email (db-fetch "emails" addr))
+           (define addr-email
+             (db:fetch (current-db-conn) #:bucket "emails" #:key addr))
            (when addr-email
              (thread
                (λ ()
@@ -397,7 +439,7 @@
          (history-append addr port up?))))
   (for-each
     (λ (addr) (probe-and-record addr (target-ports-fetch addr)))
-    (db-list-keys "targets")))
+    (db:list-keys (current-db-conn) #:bucket "targets")))
 
 (define/contract (serve hostname port-num max-allow-wait reuse-port?)
   (-> string? listen-port-number? exact-nonnegative-integer? boolean? void?)
@@ -435,6 +477,11 @@
       "probe-me"
 
       #:once-each
+      [("--db")
+       path "Database directory. Default: $PWD/db"
+       (invariant-assertion path-string? path)
+       (current-db-conn path)]
+
       [("--host")
        host-name-or-address "Hostname or address to listen on."
        (set! hostname host-name-or-address)]
