@@ -141,7 +141,7 @@
 
 (define/contract (reply op code [body ""])
   (->* (output-port? (integer-in 100 599)) (string?) void?)
-  (log-debug "begin response: ~a ~a" code body)
+  (log-debug "begin response: ~a" code)
   (display-lines
     (list (format "HTTP/1.0 ~a ~a" code (hash-ref phrases code ""))
           "Server: probe-me.xandkar"
