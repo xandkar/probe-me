@@ -10,6 +10,14 @@
 (module+ test
   (require rackunit))
 
+(require "db-sig.rkt"
+         "fsdb-unit.rkt")
+
+(define-values/invoke-unit
+  fsdb@
+  (import)
+  (export (prefix db: db^)))
+
 
 (define (kvl/c k v) (listof (cons/c k v)))
 
@@ -47,67 +55,6 @@
                       500 "Internal Server Error"))
 
 (define current-db-conn (make-parameter "db"))
-
-;; TODO IO errors
-(define-signature db^
-  ((contracted
-     [conn?     (-> any/c boolean?)]
-     [list-keys (-> conn? #:bucket string? (listof string?))]
-
-     ; blob
-     [store     (-> conn? #:bucket string? #:key string? #:val string? void?)]
-     [fetch     (-> conn? #:bucket string? #:key string? (or/c #f string?))]
-
-     ; list
-     [store*    (-> conn? #:bucket string? #:key string? #:vals (listof string?) void?)]
-     [fetch*    (-> conn? #:bucket string? #:key string? (listof string?))]
-
-     ; log
-     [append    (-> conn? #:bucket string? #:key string? #:val string? void?)]
-     )))
-
-(define-unit fsdb@
-  (import)
-  (export db^)
-
-  (define conn? path-string?)
-
-  (define (store dir #:bucket b #:key k #:val v)
-    (define path (build-path dir b k))
-    (make-parent-directory* path)
-    (display-to-file v path #:exists 'replace))
-
-  (define (store* dir #:bucket b #:key k #:vals vs)
-    (define path (build-path dir b k))
-    (make-parent-directory* path)
-    (display-lines-to-file vs path #:exists 'replace))
-
-  (define (fetch dir #:bucket b #:key k)
-    (define path (build-path dir b k))
-    (if (file-exists? path)
-        (file->string path)
-        #f))
-
-  (define (fetch* dir #:bucket b #:key k)
-    (define path (build-path dir b k))
-    (if (file-exists? path)
-        (file->lines path)
-        '()))
-
-  (define (list-keys dir #:bucket b)
-    (define path (build-path dir b))
-    (make-directory* path)
-    (map path->string (directory-list path)))
-
-  (define (append dir #:bucket b #:key k #:val v)
-    (define path (build-path dir b k))
-    (make-parent-directory* path)
-    (display-lines-to-file (list v) path #:exists 'append)))
-
-(define-values/invoke-unit
-  fsdb@
-  (import)
-  (export (prefix db: db^)))
 
 (define/contract (history-key addr port)
   (-> string? positive-integer? string?)

@@ -1,6 +1,6 @@
 EXE := probe-me
 
-$(EXE): $(EXE).rkt
+$(EXE): $(EXE).rkt db-sig.rkt fsdb-unit.rkt
 	raco exe --orig-exe -o $@ $(EXE).rkt
 
 .PHONY: build
